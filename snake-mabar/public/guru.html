@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Live Score - Adventure</title>
+    <style>
+        body {
+            background: #0f172a;
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 30px;
+        }
+
+        h1 {
+            color: #38bdf8;
+        }
+
+        table {
+            width: 80%;
+            margin: 0 auto;
+            border-collapse: collapse;
+            background: #1e293b;
+            font-size: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        th,
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #334155;
+        }
+
+        th {
+            background: #38bdf8;
+            color: #0f172a;
+        }
+
+        .dead {
+            color: #64748b;
+            text-decoration: line-through;
+        }
+
+        /* Tombol untuk memulai musik di browser Guru */
+        #musicBtn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #f59e0b;
+            border: none;
+            border-radius: 5px;
+            color: #0f172a;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: 0.2s;
+        }
+
+        #musicBtn:hover {
+            background: #d97706;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🏆 Papan Skor Pahlawan PPLG 🏆</h1>
+
+    <!-- Tombol Play Audio -->
+    <button id="musicBtn" onclick="startLobbyMusic()">🎵 Putar Musik Lobi</button>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Status / Peringkat</th>
+                <th>Karakter</th>
+                <th>Nama Siswa</th>
+                <th>Permata Terkumpul</th>
+            </tr>
+        </thead>
+        <tbody id="board"></tbody>
+    </table>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let audioCtx;
+        let isMusicPlaying = false;
+        let musicInterval;
+
+        // --- SISTEM MUSIK LOBI (CERIA & UPBEAT) ---
+        function startLobbyMusic() {
+            if (isMusicPlaying) {
+                // Jika sedang main, matikan
+                clearInterval(musicInterval);
+                isMusicPlaying = false;
+                document.getElementById('musicBtn').innerText = "🎵 Putar Musik Lobi";
+                document.getElementById('musicBtn').style.background = "#f59e0b";
+                return;
+            }
+
+            // Inisialisasi Audio (Harus dari interaksi klik Guru)
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            isMusicPlaying = true;
+            document.getElementById('musicBtn').innerText = "🔇 Matikan Musik";
+            document.getElementById('musicBtn').style.background = "#ef4444";
+
+            // Nada akor mayor yang ceria (C Mayor arpeggio)
+            // C4, E4, G4, C5, G4, E4
+            const notes = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63];
+            let step = 0;
+
+            musicInterval = setInterval(() => {
+                if (!audioCtx) return;
+
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                osc.type = 'sine'; // Suara bulat dan halus, cocok untuk lobi
+                osc.frequency.value = notes[step % notes.length];
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                // Volume diatur sedang (0.15) agar nyaman didengar saat pameran
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.3);
+
+                step++;
+            }, 250); // Tempo cepat (250ms per nada) yang ceria
+        }
+
+        function getRoleText(role) {
+            if (role === 'ksatria') return '🤺 Ksatria';
+            if (role === 'penyihir') return '🧙‍♂️ Penyihir';
+            if (role === 'pemanah') return '🏹 Pemanah';
+            if (role === 'ninja') return '🥷 Ninja';
+            if (role === 'cyborg') return '🤖 Cyborg';
+            return '👤 Hero';
+        }
+
+        socket.on('gameState', (state) => {
+            const board = document.getElementById('board');
+            board.innerHTML = '';
+
+            let playerList = Object.values(state.players);
+            playerList.sort((a, b) => {
+                if (a.isGameOver === b.isGameOver) return b.score - a.score;
+                return a.isGameOver ? 1 : -1;
+            });
+
+            playerList.forEach((p, index) => {
+                let rank = index === 0 ? '🥇' : (index === 1 ? '🥈' : (index === 2 ? '🥉' : index + 1));
+                let iconText = getRoleText(p.role);
+
+                let rowClass = '';
+                if (p.isGameOver) {
+                    rank = '💀 Gugur';
+                    iconText = '💀';
+                    rowClass = 'class="dead"';
+                }
+
+                board.innerHTML += `
+                    <tr ${rowClass}>
+                        <td>${rank}</td>
+                        <td>${iconText}</td>
+                        <td>${p.nama}</td>
+                        <td><strong>${p.score} 💎</strong></td>
+                    </tr>
+                `;
+            });
+        });
+    </script>
+</body>
+
+</html>

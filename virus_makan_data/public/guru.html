@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Live Score - Data Eater</title>
+    <style>
+        body {
+            background: #0f172a;
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 30px;
+        }
+
+        h1 {
+            color: #38bdf8;
+            font-size: 40px;
+            margin-bottom: 5px;
+            text-shadow: 0 0 15px rgba(56, 189, 248, 0.5);
+        }
+
+        p {
+            color: #94a3b8;
+            font-size: 18px;
+            margin-bottom: 30px;
+        }
+
+        table {
+            width: 80%;
+            max-width: 800px;
+            margin: 0 auto;
+            border-collapse: collapse;
+            background: #1e293b;
+            font-size: 22px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        th,
+        td {
+            padding: 18px;
+            border-bottom: 1px solid #334155;
+        }
+
+        th {
+            background: #0ea5e9;
+            color: white;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .color-dot {
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            display: inline-block;
+            vertical-align: middle;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+        }
+
+        .dead {
+            color: #64748b;
+            text-decoration: line-through;
+        }
+
+        /* Tombol Musik Lobi */
+        #musicBtn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            background: #f59e0b;
+            border: none;
+            border-radius: 8px;
+            color: #0f172a;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(245, 158, 11, 0.4);
+            transition: 0.2s;
+            z-index: 100;
+        }
+
+        #musicBtn:hover {
+            background: #d97706;
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🦠 Top 10 Data Eater PPLG 🦠</h1>
+    <p>Lihat siapa yang punya ukuran sel virus paling besar!</p>
+
+    <!-- Tombol Play Audio -->
+    <button id="musicBtn" onclick="startLobbyMusic()">🎵 Putar Musik Lobi</button>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Warna</th>
+                <th>Nama Siswa</th>
+                <th>Skor / Massa</th>
+            </tr>
+        </thead>
+        <tbody id="board"></tbody>
+    </table>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        // --- SISTEM MUSIK LOBI (CERIA & ARCADE) ---
+        let audioCtx;
+        let isMusicPlaying = false;
+        let musicInterval;
+
+        function startLobbyMusic() {
+            if (isMusicPlaying) {
+                // Matikan musik
+                clearInterval(musicInterval);
+                isMusicPlaying = false;
+                document.getElementById('musicBtn').innerText = "🎵 Putar Musik Lobi";
+                document.getElementById('musicBtn').style.background = "#f59e0b";
+                return;
+            }
+
+            // Inisialisasi Audio Context
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            isMusicPlaying = true;
+            document.getElementById('musicBtn').innerText = "🔇 Matikan Musik";
+            document.getElementById('musicBtn').style.background = "#ef4444";
+
+            // Nada akor mayor yang riang (G Mayor synth-pop)
+            // G4, B4, D5, G5
+            const notes = [392.00, 493.88, 587.33, 783.99, 587.33, 493.88];
+            let step = 0;
+
+            musicInterval = setInterval(() => {
+                if (!audioCtx) return;
+
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                // 'triangle' memberikan nuansa retro gameboy yang ceria
+                osc.type = 'triangle';
+                osc.frequency.value = notes[step % notes.length];
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                // Volume diatur background (0.1) agar nyaman untuk ngobrol
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.2);
+
+                step++;
+            }, 200); // Tempo cukup cepat agar semangat
+        }
+
+        // --- RENDER LEADERBOARD ---
+        socket.on('gameState', (state) => {
+            const board = document.getElementById('board');
+            board.innerHTML = '';
+
+            let playerList = Object.values(state.players);
+
+            // Urutkan berdasarkan yang masih hidup dan skor tertinggi
+            playerList.sort((a, b) => {
+                if (a.isGameOver === b.isGameOver) return b.score - a.score;
+                return a.isGameOver ? 1 : -1;
+            });
+
+            // Ambil maksimal 10 besar saja
+            let top10 = playerList.slice(0, 10);
+
+            top10.forEach((p, index) => {
+                let rowClass = p.isGameOver ? 'class="dead"' : '';
+                let status = p.isGameOver ? '💀' : `<div class="color-dot" style="background-color: ${p.color};"></div>`;
+
+                let rankTrophy = '';
+                if (!p.isGameOver) {
+                    if (index === 0) rankTrophy = ' 👑'; // Mahkota untuk peringkat 1
+                }
+
+                board.innerHTML += `
+                    <tr ${rowClass}>
+                        <td>${status}</td>
+                        <td><strong>${p.nama}</strong>${rankTrophy}</td>
+                        <td>${p.score}</td>
+                    </tr>
+                `;
+            });
+        });
+    </script>
+</body>
+
+</html>

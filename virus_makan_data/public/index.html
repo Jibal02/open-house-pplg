@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Data Eater - PPLG</title>
+    <style>
+        body {
+            background: #0f172a;
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+
+        #loginPanel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e293b;
+            padding: 30px;
+            border-radius: 15px;
+            width: 85%;
+            max-width: 400px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            z-index: 20;
+            box-sizing: border-box;
+        }
+
+        input {
+            padding: 12px;
+            font-size: 16px;
+            border-radius: 5px;
+            margin: 10px 0;
+            width: 100%;
+            border: none;
+            box-sizing: border-box;
+            text-align: center;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 18px;
+            background: #38bdf8;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            width: 100%;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #0ea5e9;
+        }
+
+        #gameContainer {
+            display: none;
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: #1e293b;
+        }
+
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        #gameOverScreen h1 {
+            color: #ef4444;
+            font-size: 40px;
+            margin-bottom: 10px;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+            margin-top: 20px;
+            width: auto;
+            padding: 10px 30px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="loginPanel">
+        <h1 style="color:#38bdf8; margin-top:0;">🦠 Data Eater</h1>
+        <p style="font-size: 14px; color:#94a3b8;">Sentuh/tahan layar untuk bergerak. Makan titik warna-warni untuk
+            membesar!</p>
+        <input type="text" id="playerName" placeholder="Nama Kamu..." required>
+        <button onclick="joinGame()">Mulai Main!</button>
+    </div>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="gameOverScreen">
+            <h1>KAMU DIMAKAN! 💀</h1>
+            <h2 id="finalScore">Skor Akhir: 0</h2>
+            <button class="btn-danger" onclick="location.reload()">Main Lagi</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let myId = null;
+        let myLastScore = 0;
+        let isDead = false;
+
+        const WORLD_W = 3000;
+        const WORLD_H = 2000;
+        let camX = 0;
+        let camY = 0;
+
+        let currentState = { players: {}, foods: [] };
+
+        // --- SISTEM AUDIO & ANIMASI ---
+        let audioCtx;
+        let particles = [];
+        let bgmInterval;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        // --- MUSIK LATAR (BGM) SCI-FI ARCADE ---
+        function startBGM() {
+            // Melodi bass cepat (Cyberpunk / Agar.io tegang)
+            const notes = [110.00, 130.81, 146.83, 130.81];
+            let step = 0;
+
+            bgmInterval = setInterval(() => {
+                if (!audioCtx || isDead) return;
+
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                osc.type = 'square'; // Suara retro 8-bit
+                osc.frequency.value = notes[step % notes.length];
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                // Volume sangat kecil (0.05) agar tidak menutupi efek suara makan
+                gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.15);
+
+                step++;
+            }, 250); // Tempo cepat (jantung berdebar)
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'pop') {
+                // Suara "Pop" memakan data kecil
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'chomp') {
+                // Suara Bass besar memakan pemain lain
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.2);
+            } else if (type === 'die') {
+                // Suara Game Over (Melorot)
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.5);
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.5);
+            }
+        }
+
+        function spawnParticles(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        // --- SISTEM LAYAR & INPUT ---
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function joinGame() {
+            const nama = document.getElementById('playerName').value;
+            if (!nama) return alert('Isi nama dulu!');
+
+            // Aktifkan audio dan mulai musik latar
+            initAudio();
+            startBGM();
+
+            myId = socket.id;
+            socket.emit('joinGame', nama);
+
+            document.getElementById('loginPanel').style.display = 'none';
+            document.getElementById('gameContainer').style.display = 'block';
+        }
+
+        function sendTarget(clientX, clientY) {
+            const targetX = clientX + camX;
+            const targetY = clientY + camY;
+            socket.emit('move', { x: targetX, y: targetY });
+        }
+
+        canvas.addEventListener('mousemove', (e) => sendTarget(e.clientX, e.clientY));
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            sendTarget(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            sendTarget(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+
+        socket.on('gameState', (state) => {
+            currentState = state;
+        });
+
+        // --- RENDER ENGINE 60FPS ---
+        function renderGame() {
+            requestAnimationFrame(renderGame);
+
+            if (document.getElementById('gameContainer').style.display === 'none') return;
+
+            let state = currentState;
+            if (Object.keys(state.players).length === 0) return;
+
+            let me = state.players[myId];
+
+            // Logika Kamera
+            if (me && !me.isGameOver) {
+                camX = me.x - (canvas.width / 2);
+                camY = me.y - (canvas.height / 2);
+
+                if (canvas.width > WORLD_W) camX = (WORLD_W - canvas.width) / 2;
+                else camX = Math.max(0, Math.min(WORLD_W - canvas.width, camX));
+
+                if (canvas.height > WORLD_H) camY = (WORLD_H - canvas.height) / 2;
+                else camY = Math.max(0, Math.min(WORLD_H - canvas.height, camY));
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(-camX, -camY);
+
+            // Render Latar Belakang & Grid
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= WORLD_W; x += 50) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke();
+            }
+            for (let y = 0; y <= WORLD_H; y += 50) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke();
+            }
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 5;
+            ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
+
+            // Render Makanan
+            state.foods.forEach(f => {
+                ctx.fillStyle = f.color;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Render Pemain (Sel)
+            for (let id in state.players) {
+                let p = state.players[id];
+                if (p.isGameOver) continue;
+
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "rgba(255,255,255,0.5)";
+                ctx.stroke();
+
+                let fontSize = Math.max(12, p.radius * 0.4);
+                ctx.fillStyle = "white";
+                ctx.font = `bold ${fontSize}px Arial`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(p.nama, p.x, p.y);
+            }
+
+            // Render Partikel Animasi Ledakan
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.03;
+
+                ctx.globalAlpha = Math.max(0, p.life);
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+
+            ctx.restore();
+
+            // Cek Trigger Suara dan Game Over
+            if (me && !me.isGameOver) {
+                if (me.score > myLastScore) {
+                    let scoreDiff = me.score - myLastScore;
+                    if (scoreDiff === 5) {
+                        playSound('pop'); // Memakan titik makanan
+                    } else {
+                        playSound('chomp'); // Memakan sel siswa lain!
+                        spawnParticles(me.x, me.y, me.color, 30);
+                    }
+                    myLastScore = me.score;
+                }
+            }
+
+            // Logika Kematian (Hentikan Musik, Mainkan Suara Mati)
+            if (me && me.isGameOver && !isDead) {
+                playSound('die');
+                clearInterval(bgmInterval); // Matikan musik BGM seketika
+                isDead = true;
+
+                document.getElementById('gameOverScreen').style.display = 'flex';
+                document.getElementById('finalScore').innerText = `Skor Terakhir: ${me.score}`;
+            }
+        }
+
+        renderGame();
+    </script>
+</body>
+
+</html>
