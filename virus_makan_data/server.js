@@ -8,13 +8,16 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
-// 1. Peta diperbesar agar layar monitor besar tidak menyentuh ujung dengan cepat
 const CANVAS_W = 3000;
 const CANVAS_H = 2000;
-const MAX_FOOD = 400; // Makanan ditambah menyesuaikan luas peta
+const MAX_FOOD = 400;
+const MAX_BOOST = 25;
+const MAX_MAGNET = 15; // Jumlah item magnet di arena
 
 let players = {};
 let foods = [];
+let speedBoosts = [];
+let magnets = [];
 
 function spawnFood() {
     return {
@@ -24,7 +27,23 @@ function spawnFood() {
     };
 }
 
+function spawnBoost() {
+    return {
+        x: Math.random() * (CANVAS_W - 100) + 50,
+        y: Math.random() * (CANVAS_H - 100) + 50
+    };
+}
+
+function spawnMagnet() {
+    return {
+        x: Math.random() * (CANVAS_W - 100) + 50,
+        y: Math.random() * (CANVAS_H - 100) + 50
+    };
+}
+
 for (let i = 0; i < MAX_FOOD; i++) foods.push(spawnFood());
+for (let i = 0; i < MAX_BOOST; i++) speedBoosts.push(spawnBoost());
+for (let i = 0; i < MAX_MAGNET; i++) magnets.push(spawnMagnet());
 
 io.on('connection', (socket) => {
     socket.on('joinGame', (nama) => {
@@ -35,6 +54,9 @@ io.on('connection', (socket) => {
             y: Math.random() * CANVAS_H,
             radius: 20,
             score: 0,
+            level: 1, // Level awal pemain
+            speedBoostTimer: 0,
+            magnetTimer: 0, // Timer durasi magnet
             color: `hsl(${Math.random() * 360}, 100%, 50%)`,
             targetX: 0,
             targetY: 0,
@@ -62,7 +84,17 @@ setInterval(() => {
         let dy = p.targetY - p.y;
         let dist = Math.hypot(dx, dy);
 
-        let speed = Math.max(1, 6 - (p.radius / 30));
+        // Kecepatan dasar melambat seiring ukuran radius, tetapi bertambah +0.5 per Level
+        let baseSpeed = Math.max(1, 6 - (p.radius / 30)) + ((p.level - 1) * 0.5);
+        
+        // Pengali kecepatan jika Speed Boost aktif
+        let speedMultiplier = 1;
+        if (p.speedBoostTimer > 0) {
+            speedMultiplier = 1.8;
+            p.speedBoostTimer--;
+        }
+
+        let speed = baseSpeed * speedMultiplier;
 
         if (dist > 5) {
             p.x += (dx / dist) * speed;
@@ -72,6 +104,22 @@ setInterval(() => {
         p.x = Math.max(p.radius, Math.min(CANVAS_W - p.radius, p.x));
         p.y = Math.max(p.radius, Math.min(CANVAS_H - p.radius, p.y));
 
+        // Efek Magnet Aktif: Menyedot makanan di sekitar
+        if (p.magnetTimer > 0) {
+            p.magnetTimer--;
+            let magnetRadius = p.radius + 300; // Jangkauan magnet 300px
+            foods.forEach(f => {
+                let fDx = p.x - f.x;
+                let fDy = p.y - f.y;
+                let fDist = Math.hypot(fDx, fDy);
+                if (fDist < magnetRadius && fDist > 5) {
+                    f.x += (fDx / fDist) * 12; // Tarik makanan menuju pemain
+                    f.y += (fDy / fDist) * 12;
+                }
+            });
+        }
+
+        // Cek Makan Titik Makanan
         for (let i = foods.length - 1; i >= 0; i--) {
             let f = foods[i];
             let distToFood = Math.hypot(p.x - f.x, p.y - f.y);
@@ -83,6 +131,36 @@ setInterval(() => {
             }
         }
 
+        // System Level Up setiap kelipatan 10.000 Poin
+        let targetLevel = Math.floor(p.score / 3000) + 1;
+        if (targetLevel > p.level) {
+            p.level = targetLevel;
+            p.radius = 20; // Ukuran diset ulang menjadi kecil kembali
+        }
+
+        // Cek Makan Item Speed Boost ⚡
+        for (let i = speedBoosts.length - 1; i >= 0; i--) {
+            let sb = speedBoosts[i];
+            let distToBoost = Math.hypot(p.x - sb.x, p.y - sb.y);
+            if (distToBoost < p.radius + 10) {
+                p.speedBoostTimer = 150;
+                speedBoosts.splice(i, 1);
+                speedBoosts.push(spawnBoost());
+            }
+        }
+
+        // Cek Makan Item Magnet 🧲
+        for (let i = magnets.length - 1; i >= 0; i--) {
+            let m = magnets[i];
+            let distToMag = Math.hypot(p.x - m.x, p.y - m.y);
+            if (distToMag < p.radius + 10) {
+                p.magnetTimer = 240; // Magnet aktif selama 8 detik (240 tick)
+                magnets.splice(i, 1);
+                magnets.push(spawnMagnet());
+            }
+        }
+
+        // Cek Makan Pemain Lain
         activePlayers.forEach(other => {
             if (p.id !== other.id) {
                 let distToOther = Math.hypot(p.x - other.x, p.y - other.y);
@@ -95,7 +173,7 @@ setInterval(() => {
         });
     });
 
-    io.emit('gameState', { players, foods });
+    io.emit('gameState', { players, foods, speedBoosts, magnets });
 }, 1000 / 30);
 
 server.listen(3000, '0.0.0.0', () => {
