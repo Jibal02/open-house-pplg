@@ -291,7 +291,6 @@
         function sendTarget(clientX, clientY) {
             const targetX = clientX + camX;
             const targetY = clientY + camY;
-            targetPoint = { x: targetX, y: targetY };
             socket.emit('move', { x: targetX, y: targetY });
         }
 
@@ -526,12 +525,6 @@
                 // Efek Glowing jika Speed Boost Aktif
                 if (p.speedBoostTimer > 0) {
                     ctx.save();
-                    ctx.shadowColor = '#facc15';
-                    ctx.shadowBlur = 20;
-                    ctx.fillStyle = p.color;
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                    ctx.fill();
                     ctx.restore();
                 } else {
                     ctx.fillStyle = p.color;
@@ -594,10 +587,6 @@
 
             ctx.restore();
 
-            if (me) {
-                drawMinimap();
-                drawLeaderboard(me);
-            }
 
             // Cek Trigger Suara dan Game Over
             if (me && !me.isGameOver) {
