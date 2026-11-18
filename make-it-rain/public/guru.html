@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Score - Make It Rain</title>
+    <style>
+        body {
+            background: #0f172a;
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 24px;
+        }
+
+        h1 {
+            color: #facc15;
+            font-size: 38px;
+            margin: 0 0 4px 0;
+            text-shadow: 0 0 18px rgba(250, 204, 21, 0.4);
+        }
+
+        #status {
+            color: #94a3b8;
+            font-size: 19px;
+            margin-bottom: 24px;
+        }
+
+        #board {
+            width: 90%;
+            max-width: 800px;
+            margin: 0 auto;
+            border-collapse: collapse;
+            background: #1e293b;
+            font-size: 20px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        th,
+        td {
+            padding: 14px;
+            border-bottom: 1px solid #334155;
+        }
+
+        th {
+            background: #ca8a04;
+            color: #0f172a;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 15px;
+        }
+
+        .color-dot {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: inline-block;
+            vertical-align: middle;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+        }
+
+        .me {
+            color: #38bdf8;
+        }
+
+        #fameWrap {
+            width: 90%;
+            max-width: 800px;
+            margin: 28px auto 0 auto;
+            text-align: left;
+        }
+
+        #fameWrap h2 {
+            color: #facc15;
+            font-size: 20px;
+            margin-bottom: 8px;
+        }
+
+        #fame {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            color: #cbd5e1;
+            font-size: 16px;
+        }
+
+        #fame li {
+            padding: 6px 10px;
+            border-bottom: 1px solid #334155;
+        }
+
+        #musicBtn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 18px;
+            background: #f59e0b;
+            border: none;
+            border-radius: 8px;
+            color: #0f172a;
+            font-weight: bold;
+            font-size: 15px;
+            cursor: pointer;
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>💰 TOP EMAS MAKE IT RAIN PPLG 💰</h1>
+    <p id="status">Menunggu pemain...</p>
+
+    <button id="musicBtn" onclick="toggleMusic()">🎵 Putar Musik Lobi</button>
+
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Warna</th>
+                <th>Nama Siswa</th>
+                <th>Emas di Ember</th>
+                <th>Total Tangkapan</th>
+            </tr>
+        </thead>
+        <tbody id="board"></tbody>
+    </table>
+
+    <div id="fameWrap">
+        <h2>👑 Hall of Fame (5 Ronde Terakhir)</h2>
+        <ul id="fame"></ul>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const board = document.getElementById('board');
+        const statusEl = document.getElementById('status');
+        const fame = document.getElementById('fame');
+
+        let audioCtx = null;
+        let musicTimer = null;
+        let playing = false;
+        let lastUpdate = 0;
+
+        function cell(text, className) {
+            const td = document.createElement('td');
+            td.textContent = text;
+            if (className) td.className = className;
+            return td;
+        }
+
+        function formatTime(ms) {
+            const total = Math.max(0, Math.ceil(ms / 1000));
+            return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+        }
+
+        function renderState(state) {
+            if (state.phase === 'waiting') {
+                statusEl.textContent = 'Menunggu pemain...';
+            } else if (state.phase === 'countdown') {
+                statusEl.textContent = `Ronde #${state.roundNo} dimulai dalam ${Math.ceil(state.timeLeftMs / 1000)} detik`;
+            } else if (state.phase === 'playing') {
+                statusEl.textContent = `Ronde #${state.roundNo} — ${formatTime(state.timeLeftMs)}` +
+                    (state.timeLeftMs <= 15000 ? '  ⚡ GOLD RUSH! ⚡' : '');
+            } else {
+                const w = state.winner;
+                statusEl.textContent = w
+                    ? `Ronde #${state.roundNo} selesai — pemenang: ${w.nama} (${w.gold} emas)`
+                    : `Ronde #${state.roundNo} selesai`;
+            }
+
+            const list = Object.values(state.players).sort((a, b) =>
+                b.gold - a.gold || b.totalCaught - a.totalCaught
+            );
+
+            board.textContent = '';
+            list.forEach((p, index) => {
+                const row = document.createElement('tr');
+
+                row.appendChild(cell(index + 1));
+
+                const colorCell = document.createElement('td');
+                const dot = document.createElement('div');
+                dot.className = 'color-dot';
+                dot.style.backgroundColor = p.color;
+                colorCell.appendChild(dot);
+                row.appendChild(colorCell);
+
+                const nameClass = p.id === socket.id ? 'me' : '';
+                row.appendChild(cell(p.nama + (p.id === socket.id ? ' (kamu)' : ''), nameClass));
+                row.appendChild(cell(p.gold, nameClass));
+                row.appendChild(cell(p.totalCaught));
+                board.appendChild(row);
+            });
+
+            fame.textContent = '';
+            state.hallOfFame.forEach((entry) => {
+                const li = document.createElement('li');
+                li.textContent = `Ronde #${entry.roundNo} — ${entry.nama}: ${entry.gold} emas`;
+                fame.appendChild(li);
+            });
+        }
+
+        socket.on('state', (state) => {
+            const now = Date.now();
+            if (now - lastUpdate < 200) return;
+            lastUpdate = now;
+            renderState(state);
+        });
+
+        function toggleMusic() {
+            const btn = document.getElementById('musicBtn');
+            if (playing) {
+                clearInterval(musicTimer);
+                playing = false;
+                btn.textContent = '🎵 Putar Musik Lobi';
+                btn.style.background = '#f59e0b';
+                return;
+            }
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            playing = true;
+            btn.textContent = '🔇 Matikan Musik';
+            btn.style.background = '#ef4444';
+
+            const notes = [392, 493.88, 587.33, 783.99, 587.33, 493.88, 440, 523.25];
+            let step = 0;
+            musicTimer = setInterval(() => {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.value = notes[step++ % notes.length];
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.09, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.19);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            }, 200);
+        }
+    </script>
+</body>
+
+</html>
