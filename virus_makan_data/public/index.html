@@ -276,7 +276,6 @@
         function sendTarget(clientX, clientY) {
             const targetX = clientX + camX;
             const targetY = clientY + camY;
-            targetPoint = { x: targetX, y: targetY };
             socket.emit('move', { x: targetX, y: targetY });
         }
 
@@ -294,109 +293,7 @@
             currentState = state;
         });
 
-        function drawMinimap() {
-            const m = minimapRect();
-            ctx.save();
-
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-            ctx.fillRect(m.x, m.y, m.w, m.h);
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(m.x, m.y, m.w, m.h);
-
-            ctx.globalAlpha = 0.5;
-            currentState.foods.forEach(f => {
-                ctx.fillStyle = f.color;
-                ctx.fillRect(m.x + f.x * m.scale - 1, m.y + f.y * m.scale - 1, 2, 2);
-            });
-            ctx.globalAlpha = 1;
-
-            ctx.beginPath();
-            ctx.rect(m.x, m.y, m.w, m.h);
-            ctx.clip();
-
-            for (let id in currentState.players) {
-                const p = currentState.players[id];
-                if (p.isGameOver) continue;
-
-                const px = m.x + p.x * m.scale;
-                const py = m.y + p.y * m.scale;
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                ctx.arc(px, py, Math.max(2, p.radius * m.scale * 1.5), 0, Math.PI * 2);
-                ctx.fill();
-
-                if (id === myId) {
-                    ctx.strokeStyle = 'white';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-            }
-
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(
-                m.x + camX * m.scale,
-                m.y + camY * m.scale,
-                Math.min(canvas.width * m.scale, m.w),
-                Math.min(canvas.height * m.scale, m.h)
-            );
-
-            ctx.restore();
-        }
-
-        function drawLeaderboard(me) {
-            const list = Object.values(currentState.players)
-                .filter(p => !p.isGameOver)
-                .sort((a, b) => b.score - a.score);
-            const top = list.slice(0, 5);
-
-            let ownRank = 0;
-            if (me && !me.isGameOver) {
-                const index = list.findIndex(p => p.id === myId);
-                if (index >= 5) ownRank = index + 1;
-            }
-
-            const panelW = Math.min(200, canvas.width * 0.45);
-            const rowH = 20;
-            const headerH = 26;
-            const rows = top.length + (ownRank ? 1 : 0);
-            const panelH = headerH + rows * rowH + 6;
-            const x = canvas.width - panelW - MINI_MARGIN;
-            const y = MINI_MARGIN;
-
-            ctx.save();
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-            ctx.fillRect(x, y, panelW, panelH);
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, panelW, panelH);
-
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#38bdf8';
-            ctx.font = 'bold 13px Arial';
-            ctx.fillText('TOP 5', x + 10, y + 14);
-
-            ctx.font = '12px Arial';
-
-            const drawRow = (p, rank, rowIndex) => {
-                const rowY = y + headerH + rowIndex * rowH + rowH / 2;
-                const rawName = String(p.nama);
-                const name = rawName.length > 14 ? rawName.slice(0, 13) + '...' : rawName;
-                ctx.fillStyle = p.id === myId ? '#38bdf8' : 'white';
-                ctx.textAlign = 'left';
-                ctx.fillText(`${rank}. ${name}`, x + 10, rowY);
-                ctx.textAlign = 'right';
-                ctx.fillText(p.score, x + panelW - 10, rowY);
-            };
-
-            top.forEach((p, i) => drawRow(p, i + 1, i));
-            if (ownRank) drawRow(me, ownRank, top.length);
-
-            ctx.restore();
-        }
-
+        
         // --- RENDER ENGINE 60FPS ---
         function renderGame() {
             requestAnimationFrame(renderGame);
@@ -511,12 +408,6 @@
                 // Efek Glowing jika Speed Boost Aktif
                 if (p.speedBoostTimer > 0) {
                     ctx.save();
-                    ctx.shadowColor = '#facc15';
-                    ctx.shadowBlur = 20;
-                    ctx.fillStyle = p.color;
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                    ctx.fill();
                     ctx.restore();
                 } else {
                     ctx.fillStyle = p.color;
@@ -554,23 +445,6 @@
                 ctx.lineTo(targetPoint.x + 14, targetPoint.y);
                 ctx.moveTo(targetPoint.x, targetPoint.y - 14);
                 ctx.lineTo(targetPoint.x, targetPoint.y + 14);
-                ctx.stroke();
-                ctx.fillStyle = '#38bdf8';
-                ctx.beginPath();
-                ctx.arc(targetPoint.x, targetPoint.y, 2, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
-            // Render Partikel Animasi Ledakan
-            for (let i = particles.length - 1; i >= 0; i--) {
-                let p = particles[i];
-                p.x += p.vx;
-                p.y += p.vy;
-                p.life -= 0.03;
-
-                ctx.globalAlpha = Math.max(0, p.life);
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
                 ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.globalAlpha = 1.0;
@@ -580,10 +454,6 @@
 
             ctx.restore();
 
-            if (me) {
-                drawMinimap();
-                drawLeaderboard(me);
-            }
 
             // Cek Trigger Suara dan Game Over
             if (me && !me.isGameOver) {
