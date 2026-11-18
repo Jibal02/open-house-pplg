@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>💰 Make It Rain - PPLG</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #0b1120;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+
+        #loginPanel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e293b;
+            padding: 30px;
+            border-radius: 16px;
+            width: 85%;
+            max-width: 420px;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+            z-index: 20;
+        }
+
+        #loginPanel h1 {
+            color: #facc15;
+            margin-top: 0;
+            text-shadow: 0 0 20px rgba(250, 204, 21, 0.4);
+        }
+
+        #loginPanel p {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            text-align: center;
+            margin: 12px 0;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            background: #facc15;
+            color: #0f172a;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+
+        button:hover {
+            background: #fbbf24;
+        }
+
+        #gameWrap {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            width: min(100vw, 150vh);
+            height: auto;
+            background: #0f172a;
+            border: 2px solid #facc15;
+            box-shadow: 0 0 50px rgba(250, 204, 21, 0.18);
+            display: block;
+        }
+
+        #muteBtn {
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 8;
+            padding: 8px 12px;
+            font-size: 16px;
+            background: rgba(15, 23, 42, 0.85);
+            color: #facc15;
+            border: 1px solid #facc15;
+        }
+
+        #touch {
+            position: absolute;
+            bottom: 18px;
+            left: 0;
+            right: 0;
+            display: none;
+            justify-content: space-between;
+            padding: 0 18px;
+            pointer-events: none;
+            z-index: 6;
+        }
+
+        #touch button {
+            pointer-events: auto;
+            width: 74px;
+            height: 74px;
+            padding: 0;
+            border-radius: 50%;
+            font-size: 28px;
+            background: rgba(250, 204, 21, 0.88);
+        }
+
+        #touch .punch {
+            background: rgba(248, 113, 113, 0.92);
+            color: white;
+        }
+
+        @media (pointer: coarse), (max-width: 900px) {
+            #touch {
+                display: flex;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="loginPanel">
+        <h1>💰 MAKE IT RAIN</h1>
+        <p>Gerak kiri-kanan, tangkap hujan emas pakai ember.<br>Tonjok lawan untuk merampok emasnya!</p>
+        <input type="text" id="playerName" maxlength="16" placeholder="Nama Kamu..." required>
+        <button onclick="joinGame()">Mulai Main!</button>
+    </div>
+
+    <div id="gameWrap">
+        <canvas id="gameCanvas" width="1200" height="800"></canvas>
+        <button id="muteBtn">🔊</button>
+        <div id="touch">
+            <button id="btnLeft">◀</button>
+            <button id="btnPunch" class="punch">👊</button>
+            <button id="btnRight">▶</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const W = 1200;
+        const H = 800;
+        const GROUND_Y = 730;
+        const BUCKET_TOP = 650;
+        const BUCKET_W = 80;
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const socket = io();
+
+        let myId = null;
+        let pendingName = '';
+        let joined = false;
+        let snapshots = [];
+        let lastPhase = '';
+        let lastRound = 0;
+        let phaseTotalLeft = 1;
+        let lastGold = null;
+        let lastCount = -1;
+        let rushAnnounced = false;
+        let particles = [];
+        let shake = 0;
+        let lastFrame = performance.now();
+        let audioCtx = null;
+        let bgmTimer = null;
+        let muted = false;
+
+        const input = { left: false, right: false };
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function sfx(type, value) {
+            if (!audioCtx || muted) return;
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'catch') {
+                const base = 520 + Math.min(8, value || 1) * 55;
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(base, now);
+                osc.frequency.exponentialRampToValueAtTime(base * 1.5, now + 0.12);
+                gain.gain.setValueAtTime(0.18, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.14);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'punch') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(190, now);
+                osc.frequency.exponentialRampToValueAtTime(60, now + 0.14);
+                gain.gain.setValueAtTime(0.24, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.16);
+            } else if (type === 'robbed') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(320, now);
+                osc.frequency.exponentialRampToValueAtTime(80, now + 0.3);
+                gain.gain.setValueAtTime(0.28, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.32);
+                osc.start(now);
+                osc.stop(now + 0.33);
+            } else if (type === 'tick') {
+                osc.type = 'square';
+                osc.frequency.value = 760;
+                gain.gain.setValueAtTime(0.12, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.09);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            } else if (type === 'rush') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.exponentialRampToValueAtTime(880, now + 0.45);
+                gain.gain.setValueAtTime(0.22, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                osc.start(now);
+                osc.stop(now + 0.51);
+            } else if (type === 'win') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(440, now);
+                osc.frequency.setValueAtTime(554.37, now + 0.12);
+                osc.frequency.setValueAtTime(659.25, now + 0.24);
+                osc.frequency.setValueAtTime(880, now + 0.36);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+                osc.start(now);
+                osc.stop(now + 0.61);
+            }
+        }
+
+        function startBgm() {
+            if (bgmTimer) return;
+            const notes = [196, 246.94, 293.66, 246.94, 174.61, 220, 261.63, 220];
+            let step = 0;
+            bgmTimer = setInterval(() => {
+                if (!audioCtx || muted) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.value = notes[step++ % notes.length];
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.035, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
+                osc.start(now);
+                osc.stop(now + 0.19);
+            }, 260);
+        }
+
+        function spawnBurst(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 9,
+                    vy: -Math.random() * 7 - 1,
+                    life: 1,
+                    color: color
+                });
+            }
+        }
+
+        function joinGame() {
+            const name = document.getElementById('playerName').value.trim();
+            if (!name) {
+                alert('Isi nama dulu!');
+                return;
+            }
+            pendingName = name;
+            initAudio();
+            startBgm();
+            if (socket.connected) doJoin(name);
+        }
+
+        function doJoin(name) {
+            joined = true;
+            socket.emit('join', name);
+            document.getElementById('loginPanel').style.display = 'none';
+            document.getElementById('gameWrap').style.display = 'flex';
+            document.getElementById('muteBtn').style.display = 'block';
+        }
+
+        socket.on('connect', () => {
+            myId = socket.id;
+            if (pendingName && !joined) doJoin(pendingName);
+        });
+
+        socket.on('state', (state) => {
+            if (state.phase !== lastPhase || state.roundNo !== lastRound) {
+                lastPhase = state.phase;
+                lastRound = state.roundNo;
+                snapshots = [];
+                phaseTotalLeft = Math.max(1, state.timeLeftMs);
+                lastCount = -1;
+                rushAnnounced = false;
+                particles = [];
+                if (state.phase === 'playing') {
+                    lastGold = state.players[myId] ? state.players[myId].gold : 0;
+                }
+                if (state.phase === 'results') sfx('win');
+            }
+
+            const me = state.players[myId];
+            if (me) {
+                if (lastGold === null) lastGold = me.gold;
+                else if (me.gold > lastGold) {
+                    sfx('catch', me.gold - lastGold);
+                    spawnBurst(me.x, BUCKET_TOP, '#facc15', 8 + Math.min(10, me.gold - lastGold));
+                } else if (me.gold < lastGold) {
+                    sfx('robbed');
+                    shake = 9;
+                    spawnBurst(me.x, BUCKET_TOP, '#f87171', 16);
+                }
+                lastGold = me.gold;
+            }
+
+            if (state.phase === 'countdown') {
+                const n = Math.max(1, Math.ceil(state.timeLeftMs / 1000));
+                if (n !== lastCount) {
+                    lastCount = n;
+                    sfx('tick');
+                }
+            }
+
+            if (state.phase === 'playing' && state.timeLeftMs <= 15000 && !rushAnnounced) {
+                rushAnnounced = true;
+                sfx('rush');
+            }
+
+            snapshots.push({ state: state, t: performance.now() });
+            if (snapshots.length > 3) snapshots.shift();
+        });
+
+        function normalizeKey(key) {
+            if (key === 'ArrowLeft' || key === 'a' || key === 'A') return 'left';
+            if (key === 'ArrowRight' || key === 'd' || key === 'D') return 'right';
+            return null;
+        }
+
+        function sendInput() {
+            socket.emit('input', input);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (!joined) return;
+            const dir = normalizeKey(e.key);
+            if (dir) {
+                e.preventDefault();
+                if (!input[dir]) {
+                    input[dir] = true;
+                    sendInput();
+                }
+                return;
+            }
+            if ((e.key === ' ' || e.key === 'j' || e.key === 'J') && !e.repeat) {
+                e.preventDefault();
+                socket.emit('punch');
+                sfx('punch');
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const dir = normalizeKey(e.key);
+            if (!dir) return;
+            e.preventDefault();
+            input[dir] = false;
+            sendInput();
+        });
+
+        function bindHold(id, key) {
+            const el = document.getElementById(id);
+            el.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                el.setPointerCapture(e.pointerId);
+                input[key] = true;
+                sendInput();
+            });
+            const release = (e) => {
+                e.preventDefault();
+                input[key] = false;
+                sendInput();
+            };
+            el.addEventListener('pointerup', release);
+            el.addEventListener('pointercancel', release);
+            el.addEventListener('lostpointercapture', release);
+        }
+
+        bindHold('btnLeft', 'left');
+        bindHold('btnRight', 'right');
+
+        document.getElementById('btnPunch').addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            socket.emit('punch');
+            sfx('punch');
+        });
+
+        document.getElementById('muteBtn').addEventListener('click', () => {
+            muted = !muted;
+            document.getElementById('muteBtn').textContent = muted ? '🔇' : '🔊';
+        });
+
+        function drawCoins(coins) {
+            for (const c of coins) {
+                ctx.save();
+                ctx.shadowColor = c.color;
+                ctx.shadowBlur = 14;
+                ctx.fillStyle = c.color;
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.beginPath();
+                ctx.arc(c.x - c.radius * 0.3, c.y - c.radius * 0.3, Math.max(1.5, c.radius * 0.22), 0, Math.PI * 2);
+                ctx.fill();
+                if (c.value > 1) {
+                    ctx.fillStyle = '#78350f';
+                    ctx.font = 'bold 10px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(c.value, c.x, c.y + 1);
+                }
+            }
+        }
+
+        function drawPlayer(p, x) {
+            const dir = p.punchDir || 1;
+            const bodyTop = 630;
+            const blink = p.immuneMs > 0 && Math.floor(performance.now() / 80) % 2 === 0;
+            ctx.save();
+            if (blink) ctx.globalAlpha = 0.55;
+
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(x - 22, GROUND_Y - 10, 14, 10);
+            ctx.fillRect(x + 8, GROUND_Y - 10, 14, 10);
+
+            ctx.fillStyle = p.color;
+            ctx.fillRect(x - 20, bodyTop, 40, GROUND_Y - bodyTop - 10);
+            ctx.beginPath();
+            ctx.arc(x, 612, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 7;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(x - 16, bodyTop + 18);
+            ctx.lineTo(x - 34, BUCKET_TOP + 18);
+            ctx.moveTo(x + 16, bodyTop + 18);
+            ctx.lineTo(x + 34, BUCKET_TOP + 18);
+            ctx.stroke();
+
+            if (p.punchMs > 0) {
+                const reach = 26 + 24 * (p.punchMs / 180);
+                const fistX = x + dir * (20 + reach);
+                const fistY = bodyTop + 22;
+                ctx.beginPath();
+                ctx.moveTo(x + dir * 14, bodyTop + 28);
+                ctx.lineTo(fistX, fistY);
+                ctx.stroke();
+                ctx.fillStyle = '#fef3c7';
+                ctx.beginPath();
+                ctx.arc(fistX, fistY, 9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fde047';
+                ctx.font = 'bold 18px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('POW!', fistX, fistY - 18);
+            }
+
+            ctx.fillStyle = '#0f172a';
+            ctx.beginPath();
+            ctx.arc(x + dir * 5, 610, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            const halfTop = BUCKET_W / 2;
+            const halfBottom = 28;
+            const bottom = BUCKET_TOP + 46;
+            ctx.beginPath();
+            ctx.moveTo(x - halfTop, BUCKET_TOP);
+            ctx.lineTo(x + halfTop, BUCKET_TOP);
+            ctx.lineTo(x + halfBottom, bottom);
+            ctx.lineTo(x - halfBottom, bottom);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(148,163,184,0.4)';
+            ctx.fill();
+            ctx.save();
+            ctx.clip();
+            const fillH = Math.min(44, 5 + p.gold * 1.3);
+            const goldGrad = ctx.createLinearGradient(0, bottom - fillH, 0, bottom);
+            goldGrad.addColorStop(0, '#fde047');
+            goldGrad.addColorStop(1, '#b45309');
+            ctx.fillStyle = goldGrad;
+            ctx.fillRect(x - halfTop, bottom - fillH, BUCKET_W, fillH);
+            ctx.restore();
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            ctx.fillStyle = '#78350f';
+            ctx.font = 'bold 15px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.gold, x, BUCKET_TOP + 24);
+
+            ctx.fillStyle = p.id === myId ? '#38bdf8' : '#e2e8f0';
+            ctx.font = 'bold 14px Arial';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.nama, x, 578);
+
+            if (p.stunMs > 0) {
+                ctx.fillStyle = '#fde047';
+                ctx.font = '16px Arial';
+                const t = performance.now() / 220;
+                for (let i = 0; i < 3; i++) {
+                    const a = t + i * 2.09;
+                    ctx.fillText('★', x + Math.cos(a) * 24, 588 + Math.sin(a) * 7);
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawHitFlights(state) {
+            for (const id in state.players) {
+                const victim = state.players[id];
+                if (victim.lastHitMs <= 0 || !victim.lastHitBy) continue;
+                const attacker = state.players[victim.lastHitBy];
+                if (!attacker) continue;
+                const t = 1 - victim.lastHitMs / 500;
+                for (let i = 0; i < 3; i++) {
+                    const k = Math.max(0, Math.min(1, t * 1.5 - i * 0.14));
+                    const px = victim.x + (attacker.x - victim.x) * k;
+                    const py = BUCKET_TOP - 20 - Math.sin(k * Math.PI) * 80;
+                    ctx.fillStyle = '#facc15';
+                    ctx.beginPath();
+                    ctx.arc(px, py, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        function drawParticles(dt) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.28;
+                p.life -= dt * 1.7;
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+                ctx.globalAlpha = Math.max(0, p.life);
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        function drawHud(state, timeLeft, viewPlayers, now) {
+            ctx.save();
+            ctx.textBaseline = 'middle';
+
+            const me = viewPlayers[myId];
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#facc15';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText(`🪙 ${me ? me.gold : 0}`, 20, 30);
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '14px Arial';
+            ctx.fillText(`RONDE #${state.roundNo}`, 20, 56);
+
+            ctx.textAlign = 'center';
+            const secs = Math.ceil(timeLeft / 1000);
+            const active = state.phase === 'playing' || state.phase === 'countdown';
+            const isRush = state.phase === 'playing' && timeLeft <= 15000;
+            ctx.fillStyle = isRush ? '#f87171' : '#f8fafc';
+            ctx.font = 'bold 34px Arial';
+            ctx.fillText(
+                active
+                    ? `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`
+                    : '—:—',
+                W / 2, 34
+            );
+
+            if (active) {
+                const ratio = Math.max(0, Math.min(1, timeLeft / phaseTotalLeft));
+                ctx.fillStyle = 'rgba(148,163,184,0.25)';
+                ctx.fillRect(W / 2 - 120, 58, 240, 6);
+                ctx.fillStyle = isRush ? '#f87171' : '#facc15';
+                ctx.fillRect(W / 2 - 120, 58, 240 * ratio, 6);
+            }
+
+            if (isRush) {
+                ctx.save();
+                ctx.globalAlpha = 0.6 + 0.4 * Math.sin(now / 120);
+                ctx.fillStyle = '#f87171';
+                ctx.font = 'bold 26px Arial';
+                ctx.fillText('⚡ GOLD RUSH! ⚡', W / 2, 96);
+                ctx.restore();
+            }
+
+            const list = Object.values(viewPlayers)
+                .sort((a, b) => b.gold - a.gold)
+                .slice(0, 5);
+            const px = W - 210;
+            const py = 16;
+            const panelH = 24 + list.length * 22;
+            ctx.fillStyle = 'rgba(15,23,42,0.78)';
+            ctx.fillRect(px, py, 194, panelH);
+            ctx.strokeStyle = 'rgba(250,204,21,0.5)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px, py, 194, panelH);
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#facc15';
+            ctx.font = 'bold 13px Arial';
+            ctx.fillText('TOP 5', px + 10, py + 14);
+            ctx.font = '12px Arial';
+            list.forEach((p, i) => {
+                const y = py + 32 + i * 22;
+                ctx.fillStyle = p.id === myId ? '#38bdf8' : '#e2e8f0';
+                const name = p.nama.length > 12 ? p.nama.slice(0, 11) + '…' : p.nama;
+                ctx.textAlign = 'left';
+                ctx.fillText(`${i + 1}. ${name}`, px + 10, y);
+                ctx.textAlign = 'right';
+                ctx.fillText(p.gold, px + 184, y);
+            });
+
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(226,232,240,0.45)';
+            ctx.font = '13px Arial';
+            ctx.fillText('A / D atau ← → : gerak     SPASI / J : tonjok', W / 2, H - 16);
+            ctx.restore();
+        }
+
+        function drawOverlay(state, timeLeft) {
+            ctx.save();
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'center';
+
+            if (state.phase === 'countdown') {
+                ctx.fillStyle = 'rgba(15,23,42,0.55)';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#facc15';
+                ctx.font = 'bold 120px Arial';
+                ctx.fillText(Math.max(1, Math.ceil(timeLeft / 1000)), W / 2, H / 2 - 20);
+                ctx.font = 'bold 30px Arial';
+                ctx.fillText('BERSIAP MENANGKAP EMAS!', W / 2, H / 2 + 70);
+                ctx.fillStyle = '#e2e8f0';
+                ctx.font = '18px Arial';
+                ctx.fillText(`Ronde #${state.roundNo}`, W / 2, H / 2 + 110);
+            } else if (state.phase === 'results') {
+                ctx.fillStyle = 'rgba(2,6,23,0.88)';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#facc15';
+                ctx.font = 'bold 54px Arial';
+                ctx.fillText(`RONDE #${state.roundNo} SELESAI`, W / 2, 150);
+
+                if (state.winner) {
+                    ctx.fillStyle = '#fde047';
+                    ctx.font = 'bold 36px Arial';
+                    ctx.fillText(`👑 ${state.winner.nama} — ${state.winner.gold} emas`, W / 2, 220);
+                }
+
+                const list = Object.values(state.players)
+                    .sort((a, b) => b.gold - a.gold)
+                    .slice(0, 3);
+                const medals = ['🥇', '🥈', '🥉'];
+                ctx.font = 'bold 22px Arial';
+                list.forEach((p, i) => {
+                    ctx.fillStyle = p.id === myId ? '#38bdf8' : '#f8fafc';
+                    ctx.fillText(`${medals[i]} ${p.nama} — ${p.gold}`, W / 2, 290 + i * 38);
+                });
+
+                const me = state.players[myId];
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '18px Arial';
+                ctx.fillText(`Emas kamu: ${me ? me.gold : 0}`, W / 2, 420);
+                ctx.fillStyle = '#facc15';
+                ctx.font = '16px Arial';
+                ctx.fillText(`Ronde berikutnya dalam ${Math.ceil(timeLeft / 1000)} detik`, W / 2, H - 80);
+            }
+            ctx.restore();
+        }
+
+        function render(now) {
+            requestAnimationFrame(render);
+            if (!joined || snapshots.length === 0) return;
+
+            const dt = Math.min((now - lastFrame) / 1000, 0.1);
+            lastFrame = now;
+
+            const prev = snapshots.length >= 2 ? snapshots[snapshots.length - 2] : null;
+            const curr = snapshots[snapshots.length - 1];
+            const span = prev ? Math.max(1, curr.t - prev.t) : 33;
+            const alpha = prev ? Math.max(0, Math.min(1, (now - prev.t) / span)) : 1;
+            const state = curr.state;
+            const timeLeft = Math.max(0, state.timeLeftMs - (now - curr.t));
+
+            const viewPlayers = {};
+            for (const id in state.players) {
+                const p = state.players[id];
+                const q = prev && prev.state.players[id];
+                viewPlayers[id] = q ? Object.assign({}, p, { x: q.x + (p.x - q.x) * alpha }) : p;
+            }
+
+            const prevCoins = new Map();
+            if (prev) prev.state.coins.forEach((c) => prevCoins.set(c.id, c));
+            const viewCoins = state.coins.map((c) => {
+                const q = prevCoins.get(c.id);
+                return q
+                    ? Object.assign({}, c, {
+                        x: q.x + (c.x - q.x) * alpha,
+                        y: q.y + (c.y - q.y) * alpha
+                    })
+                    : c;
+            });
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, W, H);
+
+            ctx.save();
+            if (shake > 0) {
+                ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+                shake = Math.max(0, shake - dt * 35);
+            }
+
+            const bg = ctx.createLinearGradient(0, 0, 0, H);
+            bg.addColorStop(0, '#0b1120');
+            bg.addColorStop(1, '#1e293b');
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, W, H);
+
+            ctx.strokeStyle = 'rgba(148,163,184,0.06)';
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= W; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, GROUND_Y);
+                ctx.stroke();
+            }
+            for (let y = 0; y <= GROUND_Y; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(W, y);
+                ctx.stroke();
+            }
+
+            drawCoins(viewCoins);
+
+            ctx.fillStyle = '#334155';
+            ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(0, GROUND_Y, W, 3);
+
+            for (const id in viewPlayers) drawPlayer(viewPlayers[id], viewPlayers[id].x);
+            drawHitFlights(state);
+            drawParticles(dt);
+            ctx.restore();
+
+            drawHud(state, timeLeft, viewPlayers, now);
+            drawOverlay(state, timeLeft);
+        }
+
+        requestAnimationFrame(render);
+    </script>
+</body>
+
+</html>
