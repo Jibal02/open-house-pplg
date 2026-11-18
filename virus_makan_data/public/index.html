@@ -109,8 +109,7 @@
 <body>
     <div id="loginPanel">
         <h1 style="color:#38bdf8; margin-top:0;">🦠 Data Eater</h1>
-        <p style="font-size: 14px; color:#94a3b8;">Sentuh/tahan layar untuk bergerak. Makan titik warna-warni untuk
-            membesar!</p>
+        <p style="font-size: 14px; color:#94a3b8;">Makan item ⚡ & 🧲! Capai 10.000 Poin untuk Level Up & Kecepatan Tambahan!</p>
         <input type="text" id="playerName" placeholder="Nama Kamu..." required>
         <button onclick="joinGame()">Mulai Main!</button>
     </div>
@@ -132,6 +131,9 @@
 
         let myId = null;
         let myLastScore = 0;
+        let myLastLevel = 1;
+        let wasBoosted = false;
+        let wasMagnet = false;
         let isDead = false;
 
         const WORLD_W = 3000;
@@ -139,9 +141,8 @@
         let camX = 0;
         let camY = 0;
 
-        let currentState = { players: {}, foods: [] };
+        let currentState = { players: {}, foods: [], speedBoosts: [], magnets: [] };
 
-        // --- SISTEM AUDIO & ANIMASI ---
         let audioCtx;
         let particles = [];
         let bgmInterval;
@@ -153,9 +154,7 @@
             if (audioCtx.state === 'suspended') audioCtx.resume();
         }
 
-        // --- MUSIK LATAR (BGM) SCI-FI ARCADE ---
         function startBGM() {
-            // Melodi bass cepat (Cyberpunk / Agar.io tegang)
             const notes = [110.00, 130.81, 146.83, 130.81];
             let step = 0;
 
@@ -165,13 +164,12 @@
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
 
-                osc.type = 'square'; // Suara retro 8-bit
+                osc.type = 'square';
                 osc.frequency.value = notes[step % notes.length];
 
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
 
-                // Volume sangat kecil (0.05) agar tidak menutupi efek suara makan
                 gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
                 gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
 
@@ -179,7 +177,7 @@
                 osc.stop(audioCtx.currentTime + 0.15);
 
                 step++;
-            }, 250); // Tempo cepat (jantung berdebar)
+            }, 250);
         }
 
         function playSound(type) {
@@ -190,7 +188,6 @@
             gain.connect(audioCtx.destination);
 
             if (type === 'pop') {
-                // Suara "Pop" memakan data kecil
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(600, audioCtx.currentTime);
                 osc.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
@@ -198,8 +195,33 @@
                 gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
                 osc.start();
                 osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'boost') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.25);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.25);
+            } else if (type === 'magnet') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+                osc.frequency.linearRampToValueAtTime(600, audioCtx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            } else if (type === 'levelup') {
+                // Suara Fanfare Level Up
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+                osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.1); // E5
+                osc.frequency.setValueAtTime(783.99, audioCtx.currentTime + 0.2); // G5
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.4);
             } else if (type === 'chomp') {
-                // Suara Bass besar memakan pemain lain
                 osc.type = 'square';
                 osc.frequency.setValueAtTime(150, audioCtx.currentTime);
                 osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.2);
@@ -208,7 +230,6 @@
                 osc.start();
                 osc.stop(audioCtx.currentTime + 0.2);
             } else if (type === 'die') {
-                // Suara Game Over (Melorot)
                 osc.type = 'sawtooth';
                 osc.frequency.setValueAtTime(300, audioCtx.currentTime);
                 osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.5);
@@ -231,7 +252,6 @@
             }
         }
 
-        // --- SISTEM LAYAR & INPUT ---
         function resizeCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
@@ -243,7 +263,6 @@
             const nama = document.getElementById('playerName').value;
             if (!nama) return alert('Isi nama dulu!');
 
-            // Aktifkan audio dan mulai musik latar
             initAudio();
             startBGM();
 
@@ -274,18 +293,16 @@
             currentState = state;
         });
 
-        // --- RENDER ENGINE 60FPS ---
         function renderGame() {
             requestAnimationFrame(renderGame);
 
             if (document.getElementById('gameContainer').style.display === 'none') return;
 
             let state = currentState;
-            if (Object.keys(state.players).length === 0) return;
+            if (!state.players || Object.keys(state.players).length === 0) return;
 
             let me = state.players[myId];
 
-            // Logika Kamera
             if (me && !me.isGameOver) {
                 camX = me.x - (canvas.width / 2);
                 camY = me.y - (canvas.height / 2);
@@ -318,25 +335,70 @@
             ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
 
             // Render Makanan
-            state.foods.forEach(f => {
-                ctx.fillStyle = f.color;
-                ctx.beginPath();
-                ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
-                ctx.fill();
-            });
+            if (state.foods) {
+                state.foods.forEach(f => {
+                    ctx.fillStyle = f.color;
+                    ctx.beginPath();
+                    ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            // Render Item Speed Boost ⚡
+            if (state.speedBoosts) {
+                ctx.font = '22px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                state.speedBoosts.forEach(sb => {
+                    ctx.fillText('⚡', sb.x, sb.y);
+                });
+            }
+
+            // Render Item Magnet 🧲
+            if (state.magnets) {
+                ctx.font = '22px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                state.magnets.forEach(m => {
+                    ctx.fillText('🧲', m.x, m.y);
+                });
+            }
 
             // Render Pemain (Sel)
             for (let id in state.players) {
                 let p = state.players[id];
                 if (p.isGameOver) continue;
 
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                ctx.fill();
+                // Visual Garis Lingkaran Magnet saat Magnet Aktif
+                if (p.magnetTimer > 0) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius + 15, 0, Math.PI * 2);
+                    ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([8, 8]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+
+                // Efek Glowing jika Speed Boost Aktif
+                if (p.speedBoostTimer > 0) {
+                    ctx.save();
+                    ctx.shadowColor = '#facc15';
+                    ctx.shadowBlur = 20;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
 
                 ctx.lineWidth = 3;
-                ctx.strokeStyle = "rgba(255,255,255,0.5)";
+                ctx.strokeStyle = p.speedBoostTimer > 0 ? '#facc15' : "rgba(255,255,255,0.5)";
                 ctx.stroke();
 
                 let fontSize = Math.max(12, p.radius * 0.4);
@@ -344,10 +406,16 @@
                 ctx.font = `bold ${fontSize}px Arial`;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                ctx.fillText(p.nama, p.x, p.y);
+                
+                // Tanda Level dan Status Item pada Nama Pemain
+                let tag = `[Lvl ${p.level}] ${p.nama}`;
+                if (p.speedBoostTimer > 0) tag += ' ⚡';
+                if (p.magnetTimer > 0) tag += ' 🧲';
+
+                ctx.fillText(tag, p.x, p.y);
             }
 
-            // Render Partikel Animasi Ledakan
+            // Render Partikel Animasi
             for (let i = particles.length - 1; i >= 0; i--) {
                 let p = particles[i];
                 p.x += p.vx;
@@ -366,28 +434,51 @@
 
             ctx.restore();
 
-            // Cek Trigger Suara dan Game Over
+            // Logika Suara dan Level Up Lokal
             if (me && !me.isGameOver) {
+                // Trigger Suara Level Up
+                if (me.level > myLastLevel) {
+                    playSound('levelup');
+                    spawnParticles(me.x, me.y, '#38bdf8', 40);
+                    myLastLevel = me.level;
+                }
+
                 if (me.score > myLastScore) {
                     let scoreDiff = me.score - myLastScore;
                     if (scoreDiff === 5) {
-                        playSound('pop'); // Memakan titik makanan
+                        playSound('pop');
                     } else {
-                        playSound('chomp'); // Memakan sel siswa lain!
+                        playSound('chomp');
                         spawnParticles(me.x, me.y, me.color, 30);
                     }
                     myLastScore = me.score;
                 }
+
+                if (me.speedBoostTimer > 0 && !wasBoosted) {
+                    playSound('boost');
+                    spawnParticles(me.x, me.y, '#facc15', 25);
+                    wasBoosted = true;
+                } else if (me.speedBoostTimer <= 0) {
+                    wasBoosted = false;
+                }
+
+                if (me.magnetTimer > 0 && !wasMagnet) {
+                    playSound('magnet');
+                    spawnParticles(me.x, me.y, '#38bdf8', 25);
+                    wasMagnet = true;
+                } else if (me.magnetTimer <= 0) {
+                    wasMagnet = false;
+                }
             }
 
-            // Logika Kematian (Hentikan Musik, Mainkan Suara Mati)
+            // Logika Kematian
             if (me && me.isGameOver && !isDead) {
                 playSound('die');
-                clearInterval(bgmInterval); // Matikan musik BGM seketika
+                clearInterval(bgmInterval);
                 isDead = true;
 
                 document.getElementById('gameOverScreen').style.display = 'flex';
-                document.getElementById('finalScore').innerText = `Skor Terakhir: ${me.score}`;
+                document.getElementById('finalScore').innerText = `Skor Terakhir: ${me.score} (Level ${me.level})`;
             }
         }
 
