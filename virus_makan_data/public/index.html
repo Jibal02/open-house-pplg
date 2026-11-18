@@ -143,6 +143,21 @@
 
         let currentState = { players: {}, foods: [], speedBoosts: [], magnets: [] };
 
+        let targetPoint = null;
+        const MINI_MARGIN = 16;
+
+        function minimapRect() {
+            const w = Math.min(180, canvas.width * 0.35);
+            const h = w * (WORLD_H / WORLD_W);
+            return {
+                x: canvas.width - w - MINI_MARGIN,
+                y: canvas.height - h - MINI_MARGIN,
+                w: w,
+                h: h,
+                scale: w / WORLD_W
+            };
+        }
+        
         let audioCtx;
         let particles = [];
         let bgmInterval;
@@ -293,7 +308,7 @@
         socket.on('gameState', (state) => {
             currentState = state;
         });
-
+        
         function drawMinimap() {
             const m = minimapRect();
             ctx.save();
@@ -396,7 +411,7 @@
 
             ctx.restore();
         }
-
+        
         // --- RENDER ENGINE 60FPS ---
         function renderGame() {
             requestAnimationFrame(renderGame);
@@ -412,7 +427,7 @@
                 targetPoint = { x: me.x, y: me.y };
                 socket.emit('move', { x: me.x, y: me.y });
             }
-
+            
             // Logika Kamera
             if (me && !me.isGameOver) {
                 camX = me.x - (canvas.width / 2);
@@ -560,8 +575,7 @@
                 ctx.arc(targetPoint.x, targetPoint.y, 2, 0, Math.PI * 2);
                 ctx.fill();
             }
-
-            // Render Partikel Animasi Ledakan
+            
             for (let i = particles.length - 1; i >= 0; i--) {
                 let p = particles[i];
                 p.x += p.vx;
